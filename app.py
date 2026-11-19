@@ -1,9 +1,11 @@
+import os
 import sqlite3
 from flask import Flask, request, render_template_string
+from markupsafe import escape
 
 app = Flask(__name__)
-# Vulnerabilidad 1: Clave secreta hardcodeada
-app.config['SECRET_KEY'] = 'super_secreto_12345'
+# Mitigación 1: Obtener SECRET_KEY desde variable de entorno con respaldo seguro
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', os.urandom(24))
 
 def init_db():
     conn = sqlite3.connect('usuarios.db')
@@ -13,15 +15,23 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Mitigación adicional: Cabeceras de seguridad HTTP (CSP, X-Frame-Options, X-Content-Type-Options)
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+
 @app.route('/')
 def index():
-    # Vulnerabilidad 2: XSS Reflejado sin sanitización
-    nombre = request.args.get('nombre', 'Invitado')
-    template = f"""
+    # Mitigación 2: Sanitización / escape de entrada para prevenir XSS Reflejado
+    nombre = escape(request.args.get('nombre', 'Invitado'))
+    template = """
     <html>
         <head><title>SecureDev Portal</title></head>
         <body>
-            <h1>Bienvenido a SecureDev, {nombre}</h1>
+            <h1>Bienvenido a SecureDev, {{ nombre }}</h1>
             <form action="/login" method="POST">
                 Usuario: <input type="text" name="username"><br>
                 Clave: <input type="password" name="password"><br>
@@ -30,7 +40,7 @@ def index():
         </body>
     </html>
     """
-    return render_template_string(template)
+    return render_template_string(template, nombre=nombre)
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -38,16 +48,16 @@ def login():
     password = request.form.get('password', '')
     conn = sqlite3.connect('usuarios.db')
     c = conn.cursor()
-    # Vulnerabilidad 3: SQL Injection por concatenación directa
-    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
-    c.execute(query)
+    # Mitigación 3: Consultas parametrizadas (Prepared Statements) contra SQL Injection
+    query = "SELECT * FROM users WHERE username = ? AND password = ?"
+    c.execute(query, (username, password))
     user = c.fetchone()
     conn.close()
     if user:
-        return f"Acceso concedido para {user[1]}"
+        return f"Acceso concedido para {escape(user[1])}"
     return "Credenciales inválidas", 401
 
 if __name__ == '__main__':
     init_db()
-    # Vulnerabilidad 4: Modo debug activo y sin cabeceras HTTP de seguridad
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Mitigación 4: Modo debug desactivado para entorno de producción
+    app.run(host='0.0.0.0', port=5000, debug=False)
